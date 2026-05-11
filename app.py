@@ -5,51 +5,29 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # ====================== CONFIG ======================
-
-st.set_page_config(page_title="투자 신호등 V13.3", layout="wide")
-
-st.markdown("""
-<style>
-@media (max-width: 768px) {
-    .stColumn {
-        flex: 50% !important;
-        max-width: 50% !important;
-    }
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.title("🚦 투자 신호등 V13.3 : 시장 상태 해석 시스템")
+st.set_page_config(page_title="투자 신호등 V13 FIXED", layout="wide")
+st.title("🚦 투자 신호등 V13 FIXED")
 
 st.markdown("""
-> 이 시스템은 매매 자동화가 아니라 시장 상태를 해석하기 위한 참고 지표이다.
+> 시장 상태를 해석하는 **참고용 신호 시스템**
+> (자동매매 아님 / 판단 보조 도구)
 """)
 
-# ====================== RISK ======================
+# ====================== 종목 구조 ======================
+groups = {
+    "📌 운용종목": ["QQQ", "TQQQ", "SOXL", "SCHD"],
+    "📌 관심종목": ["VOO", "SPY", "BRK-B", "VYM", "QLD", "NOBL", "SPXL", "SMH", "TECL", "AVUV", "JEPQ", "VGT"],
+    "📌 개별종목": ["MSFT", "GOOGL", "TSLA", "AMZN", "NVDA", "AMD"]
+}
 
 RISK_MULTIPLIER = {
     "SOXL": 1.5, "TQQQ": 1.3, "TECL": 1.3, "SPXL": 1.2,
     "QQQ": 1.0, "SPY": 1.0, "SCHD": 0.8, "BRK-B": 0.8
 }
 
-# ====================== GROUPS (완전 복구) ======================
-
-groups = {
-    "📌 운용종목": ["QQQ", "TQQQ", "SOXL", "SCHD"],
-
-    "📌 관심종목": [
-        "VOO", "SPY", "BRK-B", "VYM", "QLD",
-        "NOBL", "SPXL", "SMH", "TECL", "AVUV",
-        "JEPQ", "VGT"
-    ],
-
-    "📌 개별종목": [
-        "MSFT", "GOOGL", "TSLA", "AMZN", "NVDA", "AMD"
-    ]
-}
+all_tickers = sum(groups.values(), [])
 
 # ====================== DATA ======================
-
 @st.cache_data(ttl=3600)
 def load_data(symbol, years=10):
     try:
@@ -59,22 +37,20 @@ def load_data(symbol, years=10):
         if df is None or df.empty or len(df) < 200:
             return None
 
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        # 🔥 핵심 안정화
+        df = df.copy()
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index()
+        df = df[['Close']].dropna()
 
-        return df[['Close']].dropna()
+        return df
 
     except:
         return None
 
+
 # ====================== SIGNAL ======================
-
 def get_state(mdd, mom, disp):
-
-    mdd = 0 if pd.isna(mdd) else mdd
-    mom = 0 if pd.isna(mom) else mom
-    disp = 0 if pd.isna(disp) else disp
-
     if mom >= 0.10 and disp >= 0.20:
         return 0.3, "🔴 과열"
     if mom >= 0.05:
@@ -85,25 +61,25 @@ def get_state(mdd, mom, disp):
         return 1.5, "🟢 조정"
     return 2.5, "🔵 폭락"
 
-# ====================== SIMULATION ======================
 
+# ====================== SIMULATION ======================
 def run_simulation(df, vix_df, ticker, monthly_budget):
 
     price = df['Close']
     vix = vix_df['Close'].reindex(df.index, method='ffill')
 
-    sma200 = price.rolling(200).mean()
+    sma200 = price.rolling(200, min_periods=200).mean()
     ath = price.cummax()
 
-    monthly_idx = df.resample('M').last().index
+    # 🔥 핵심 안정화 (resample 에러 제거)
+    monthly_idx = df.resample('ME').last().index
 
-    normal_shares = 0.0
-    signal_shares = 0.0
-    normal_inv = 0.0
-    signal_inv = 0.0
+    normal_shares = 0
+    signal_shares = 0
+    normal_inv = 0
+    signal_inv = 0
 
     for dt in monthly_idx:
-
         if dt not in df.index:
             continue
 
@@ -113,23 +89,29 @@ def run_simulation(df, vix_df, ticker, monthly_budget):
 
         p = price.iloc[idx]
 
-        # MOM 안전
+        # 안전 처리
         if idx < 22:
             continue
 
-        mom = (p - price.iloc[idx-22]) / price.iloc[idx-22]
         mdd = (p - ath.iloc[idx]) / ath.iloc[idx]
+        mom = (p - price.iloc[idx-22]) / price.iloc[idx-22]
 
-        sma_val = sma200.iloc[idx]
-        disp = (p - sma_val) / sma_val if pd.notna(sma_val) and sma_val != 0 else 0
+        if pd.isna(sma200.iloc[idx]) or sma200.iloc[idx] == 0:
+            continue
+
+        disp = (p - sma200.iloc[idx]) / sma200.iloc[idx]
 
         weight, _ = get_state(mdd, mom, disp)
 
+        risk = RISK_MULTIPLIER.get(ticker, 1.0)
+        final_weight = min(weight * risk, 3.0)
+
+        # DCA
         normal_shares += monthly_budget / p
         normal_inv += monthly_budget
 
-        signal_shares += (monthly_budget * weight) / p
-        signal_inv += (monthly_budget * weight)
+        signal_shares += (monthly_budget * final_weight) / p
+        signal_inv += (monthly_budget * final_weight)
 
     final_price = price.iloc[-1]
 
@@ -140,65 +122,49 @@ def run_simulation(df, vix_df, ticker, monthly_budget):
         "signal_inv": signal_inv
     }
 
-# ====================== UI ======================
 
+# ====================== UI ======================
 with st.sidebar:
     years = st.slider("분석 기간", 3, 15, 10)
     monthly_budget = st.number_input("월 투자금 ($)", value=100)
 
-# ====================== VIX SAFE ======================
-
 vix_df = load_data("^VIX", years)
+vix_now = vix_df['Close'].iloc[-1] if vix_df is not None else 20
 
-if vix_df is None or vix_df.empty:
-    vix_now = 20.0
-else:
-    v = vix_df['Close'].iloc[-1]
-    vix_now = float(v) if pd.notna(v) else 20.0
-
-# ====================== TABS ======================
 
 tab1, tab2 = st.tabs(["🚦 시장 상태", "📊 전략 검증"])
 
+
 # ====================== TAB 1 ======================
-
 with tab1:
-
     st.subheader(f"현재 VIX: {vix_now:.2f}")
 
     for group_name, ticker_list in groups.items():
-
         st.markdown(f"### {group_name}")
 
-        cols = st.columns(2)
+        cols = st.columns(2)  # 모바일 대응 핵심
 
-        for i in range(0, len(ticker_list), 2):
+        for i, t in enumerate(ticker_list):
 
-            def render(col, t):
+            df = load_data(t, 2)
+            if df is None:
+                continue
 
-                df = load_data(t, 2)
-                if df is None:
-                    col.warning(f"{t} 데이터 없음")
-                    return
+            p = df['Close'].iloc[-1]
+            sma200 = df['Close'].rolling(200).mean().iloc[-1]
+            ath = df['Close'].cummax().iloc[-1]
 
-                p = df['Close'].iloc[-1]
-                sma200 = df['Close'].rolling(200).mean().iloc[-1]
-                ath = df['Close'].cummax().iloc[-1]
+            mdd = (p - ath) / ath
+            mom = (p - df['Close'].iloc[-22]) / df['Close'].iloc[-22]
+            disp = (p - sma200) / sma200 if not pd.isna(sma200) else 0
 
-                mdd = (p - ath) / ath
+            weight, state = get_state(mdd, mom, disp)
 
-                if len(df) < 23:
-                    mom = 0
-                else:
-                    mom = (p - df['Close'].iloc[-22]) / df['Close'].iloc[-22]
+            risk = RISK_MULTIPLIER.get(t, 1.0)
+            final_weight = round(min(weight * risk, 3.0), 2)
 
-                disp = (p - sma200) / sma200 if pd.notna(sma200) else 0
-
-                weight, state = get_state(mdd, mom, disp)
-
-                final_weight = round(min(weight * RISK_MULTIPLIER.get(t, 1.0), 3.0), 2)
-
-                col.markdown(f"""
+            with cols[i % 2]:
+                st.markdown(f"""
                 <div style="padding:14px;border-radius:12px;background:#222;color:white;text-align:center;">
                     <b>{t}</b><br>
                     <div style="font-size:22px;">{final_weight}x</div>
@@ -206,42 +172,23 @@ with tab1:
                 </div>
                 """, unsafe_allow_html=True)
 
-            render(cols[0], ticker_list[i])
-
-            if i + 1 < len(ticker_list):
-                render(cols[1], ticker_list[i + 1])
 
 # ====================== TAB 2 ======================
-
 with tab2:
-
-    all_tickers = []
-    for v in groups.values():
-        all_tickers.extend(v)
-
     target = st.selectbox("종목 선택", all_tickers)
 
     if st.button("시스템 비교 실행"):
-
         df = load_data(target, years)
 
-        if df is None:
-            st.error("데이터 로딩 실패")
-        elif vix_df is None:
-            st.error("VIX 데이터 없음")
-        else:
-
+        if df is not None and vix_df is not None:
             res = run_simulation(df, vix_df, target, monthly_budget)
 
-            if res["normal_inv"] == 0:
-                st.error("데이터 부족으로 계산 불가")
-            else:
+            normal_roi = (res['normal_val'] - res['normal_inv']) / res['normal_inv'] * 100
+            signal_roi = (res['signal_val'] - res['signal_inv']) / res['signal_inv'] * 100
 
-                normal_roi = (res['normal_val'] - res['normal_inv']) / res['normal_inv'] * 100
-                signal_roi = (res['signal_val'] - res['signal_inv']) / res['signal_inv'] * 100
+            st.subheader("📊 DCA 비교")
 
-                c1, c2, c3 = st.columns(3)
-
-                c1.metric("무지성 DCA", f"{normal_roi:.1f}%")
-                c2.metric("신호 기반 DCA", f"{signal_roi:.1f}%", f"{signal_roi - normal_roi:+.1f}%p")
-                c3.metric("초과 자산", f"${res['signal_val'] - res['normal_val']:,.0f}")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("무지성 DCA", f"{normal_roi:.1f}%")
+            c2.metric("신호 DCA", f"{signal_roi:.1f}%", f"{signal_roi - normal_roi:+.1f}%p")
+            c3.metric("초과 자산", f"${res['signal_val'] - res['normal_val']:,.0f}")

@@ -1,2 +1,5 @@
-# Market-Traffic-Light-V13.2-PSYCHO-MAP-
-A market signal tool that classifies assets into overheated, neutral, and oversold zones using the 200-day moving average, momentum, and volatility to provide a risk-weighted investment confidence score. It compares fixed DCA with signal-adjusted DCA to evaluate efficiency and support more disciplined, data-driven investment decisions.
+# Investment Signal System (V13 CORE)
+
+A tactical market signal dashboard that classifies assets into overheating, neutral, and buy zones using volatility and momentum indicators.
+
+It compares signal-based DCA vs standard DCA to evaluate long-term efficiency.

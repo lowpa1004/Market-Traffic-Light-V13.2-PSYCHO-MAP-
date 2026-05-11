@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 # ====================== CONFIG ======================
 
-st.set_page_config(page_title="투자 신호등 V13.2 FIXED", layout="wide")
+st.set_page_config(page_title="투자 신호등 V13.3", layout="wide")
 
 st.markdown("""
 <style>
@@ -19,11 +19,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🚦 투자 신호등 V13.2 : 시장 상태 해석 시스템")
+st.title("🚦 투자 신호등 V13.3 : 시장 상태 해석 시스템")
 
 st.markdown("""
-> 이 시스템은 매매 자동화가 아니라  
-> 시장 상태를 해석하기 위한 참고 지표이다.
+> 이 시스템은 매매 자동화가 아니라 시장 상태를 해석하기 위한 참고 지표이다.
 """)
 
 # ====================== RISK ======================
@@ -33,11 +32,20 @@ RISK_MULTIPLIER = {
     "QQQ": 1.0, "SPY": 1.0, "SCHD": 0.8, "BRK-B": 0.8
 }
 
-# ====================== GROUP ======================
+# ====================== GROUPS (완전 복구) ======================
 
 groups = {
     "📌 운용종목": ["QQQ", "TQQQ", "SOXL", "SCHD"],
-    "📌 전략종목": ["NVDA", "TSLA", "AAPL", "MSFT", "AMD", "SMH", "QLD"]
+
+    "📌 관심종목": [
+        "VOO", "SPY", "BRK-B", "VYM", "QLD",
+        "NOBL", "SPXL", "SMH", "TECL", "AVUV",
+        "JEPQ", "VGT"
+    ],
+
+    "📌 개별종목": [
+        "MSFT", "GOOGL", "TSLA", "AMZN", "NVDA", "AMD"
+    ]
 }
 
 # ====================== DATA ======================
@@ -89,8 +97,10 @@ def run_simulation(df, vix_df, ticker, monthly_budget):
 
     monthly_idx = df.resample('M').last().index
 
-    normal_shares = signal_shares = 0.0
-    normal_inv = signal_inv = 0.0
+    normal_shares = 0.0
+    signal_shares = 0.0
+    normal_inv = 0.0
+    signal_inv = 0.0
 
     for dt in monthly_idx:
 
@@ -103,11 +113,11 @@ def run_simulation(df, vix_df, ticker, monthly_budget):
 
         p = price.iloc[idx]
 
-        # 안전 MOM
+        # MOM 안전
         if idx < 22:
             continue
-        mom = (p - price.iloc[idx-22]) / price.iloc[idx-22]
 
+        mom = (p - price.iloc[idx-22]) / price.iloc[idx-22]
         mdd = (p - ath.iloc[idx]) / ath.iloc[idx]
 
         sma_val = sma200.iloc[idx]
@@ -143,8 +153,8 @@ vix_df = load_data("^VIX", years)
 if vix_df is None or vix_df.empty:
     vix_now = 20.0
 else:
-    last_vix = vix_df['Close'].iloc[-1]
-    vix_now = float(last_vix) if pd.notna(last_vix) else 20.0
+    v = vix_df['Close'].iloc[-1]
+    vix_now = float(v) if pd.notna(v) else 20.0
 
 # ====================== TABS ======================
 
@@ -205,21 +215,33 @@ with tab1:
 
 with tab2:
 
-    target = st.selectbox("종목 선택", sum(groups.values(), []))
+    all_tickers = []
+    for v in groups.values():
+        all_tickers.extend(v)
+
+    target = st.selectbox("종목 선택", all_tickers)
 
     if st.button("시스템 비교 실행"):
 
         df = load_data(target, years)
 
-        if df is not None and vix_df is not None:
+        if df is None:
+            st.error("데이터 로딩 실패")
+        elif vix_df is None:
+            st.error("VIX 데이터 없음")
+        else:
 
             res = run_simulation(df, vix_df, target, monthly_budget)
 
-            normal_roi = (res['normal_val'] - res['normal_inv']) / res['normal_inv'] * 100
-            signal_roi = (res['signal_val'] - res['signal_inv']) / res['signal_inv'] * 100
+            if res["normal_inv"] == 0:
+                st.error("데이터 부족으로 계산 불가")
+            else:
 
-            c1, c2, c3 = st.columns(3)
+                normal_roi = (res['normal_val'] - res['normal_inv']) / res['normal_inv'] * 100
+                signal_roi = (res['signal_val'] - res['signal_inv']) / res['signal_inv'] * 100
 
-            c1.metric("무지성 DCA", f"{normal_roi:.1f}%")
-            c2.metric("신호 기반 DCA", f"{signal_roi:.1f}%", f"{signal_roi - normal_roi:+.1f}%p")
-            c3.metric("초과 자산", f"${res['signal_val'] - res['normal_val']:,.0f}")
+                c1, c2, c3 = st.columns(3)
+
+                c1.metric("무지성 DCA", f"{normal_roi:.1f}%")
+                c2.metric("신호 기반 DCA", f"{signal_roi:.1f}%", f"{signal_roi - normal_roi:+.1f}%p")
+                c3.metric("초과 자산", f"${res['signal_val'] - res['normal_val']:,.0f}")

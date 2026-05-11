@@ -6,15 +6,15 @@ from datetime import datetime, timedelta
 
 # ====================== CONFIG ======================
 
-st.set_page_config(page_title="투자 신호등 V13.2 FIXED", layout="wide")
+st.set_page_config(page_title="투자 신호등 V13.2 FINAL", layout="wide")
 st.title("🚦 투자 신호등 V13.2 : 시장 상태 해석 시스템")
 
 st.markdown("""
-> 이 시스템은 매매 자동화가 아니라  
-> 시장 상태를 해석하기 위한 참고 지표이다.
+> 이 시스템은 자동매매가 아니라  
+> 시장 상태를 해석하는 판단 보조 도구다.
 """)
 
-# ====================== RISK PROFILE ======================
+# ====================== RISK ======================
 
 RISK_MULTIPLIER = {
     "SOXL": 1.5, "TQQQ": 1.3, "TECL": 1.3, "SPXL": 1.2,
@@ -63,7 +63,7 @@ def get_state(mdd, mom, disp):
         return 1.5, "🟢 조정"
     return 2.5, "🔵 폭락"
 
-# ====================== BACKTEST (FIXED CORE) ======================
+# ====================== BACKTEST FIX ======================
 
 def run_simulation(df, vix_df, ticker, monthly_budget):
 
@@ -73,8 +73,10 @@ def run_simulation(df, vix_df, ticker, monthly_budget):
     sma200 = price.rolling(200, min_periods=200).mean()
     ath = price.cummax()
 
-    # 🔥 resample 제거 → 안정적인 월 단위 그룹
-    monthly_idx = df.groupby([df.index.year, df.index.month]).last().index
+    # 🚀 안정적인 월말 인덱스
+    monthly_idx = price.index.to_series().groupby(
+        [price.index.year, price.index.month]
+    ).max().values
 
     normal_shares = 0.0
     signal_shares = 0.0
@@ -83,10 +85,10 @@ def run_simulation(df, vix_df, ticker, monthly_budget):
 
     for dt in monthly_idx:
 
-        if dt not in df.index:
+        if dt not in price.index:
             continue
 
-        idx = df.index.get_loc(dt)
+        idx = price.index.get_loc(dt)
 
         if idx < 200:
             continue
@@ -96,9 +98,10 @@ def run_simulation(df, vix_df, ticker, monthly_budget):
         ath_val = ath.iloc[idx]
         sma_val = sma200.iloc[idx]
 
-        if pd.isna(ath_val) or ath_val == 0:
+        if pd.isna(p) or pd.isna(ath_val) or pd.isna(sma_val):
             continue
-        if pd.isna(sma_val) or sma_val == 0:
+
+        if ath_val == 0 or sma_val == 0:
             continue
 
         mdd = (p - ath_val) / ath_val
@@ -116,6 +119,14 @@ def run_simulation(df, vix_df, ticker, monthly_budget):
         signal_inv += (monthly_budget * weight)
 
     final_price = price.iloc[-1]
+
+    if normal_inv == 0 or signal_inv == 0:
+        return {
+            "normal_val": 0,
+            "signal_val": 0,
+            "normal_inv": 0,
+            "signal_inv": 0
+        }
 
     return {
         "normal_val": normal_shares * final_price,
